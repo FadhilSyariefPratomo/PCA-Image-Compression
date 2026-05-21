@@ -2,233 +2,190 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from PIL import Image
 from sklearn.decomposition import PCA
 from sklearn.metrics import mean_squared_error
 from skimage.metrics import structural_similarity as ssim
+import math
 
 st.set_page_config(page_title="PCA Image Compression", layout="wide")
 
-# =========================================================
-# FUNGSI BANTUAN
-# =========================================================
-def psnr(original, reconstructed):
-    mse = mean_squared_error(original.flatten(), reconstructed.flatten())
-    if mse == 0:
-        return 100
-    return 20 * np.log10(255.0 / np.sqrt(mse))
+st.title("📉 PCA Image Compression & EDA")
 
-def interpret_eigen(pct):
-    if pct >= 20:
-        return "Informasi sangat besar"
-    elif pct >= 10:
-        return "Informasi besar"
-    elif pct >= 5:
-        return "Informasi sedang"
-    else:
-        return "Informasi kecil"
-
-# =========================================================
-# JUDUL
-# =========================================================
-st.title("📉 PCA untuk Kompresi Citra Digital")
-st.write("Exploratory Data Analysis (EDA), PCA, dan Evaluasi Kompresi")
-
-# =========================================================
-# UPLOAD GAMBAR
-# =========================================================
+# =========================
+# UPLOAD IMAGE
+# =========================
 uploaded_file = st.file_uploader(
-    "Upload gambar (jpg/png/jpeg)", type=["jpg", "jpeg", "png"]
+    "Upload gambar (jpg / png / jpeg)",
+    type=["jpg", "jpeg", "png"]
 )
 
 if uploaded_file is not None:
-    # =====================================================
-    # BACA GAMBAR
-    # =====================================================
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img_color = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    img_color = cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB)
-    img_gray = cv2.cvtColor(img_color, cv2.COLOR_RGB2GRAY)
+    img_rgb = Image.open(uploaded_file).convert("RGB")
+    img_gray = img_rgb.convert("L")
+    img = np.array(img_gray).astype(np.float64)
 
-    h, w = img_gray.shape
+    h, w = img.shape
 
-    # =====================================================
+    # =========================
     # EDA AWAL
-    # =====================================================
-    st.header("1️⃣ EDA Awal")
+    # =========================
+    st.header("📊 EDA Awal")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.image(img_color, caption="Citra Asli", use_column_width=True)
-    with col2:
-        st.image(img_gray, caption="Grayscale", use_column_width=True)
+    pixel_min, pixel_max = img.min(), img.max()
+    mean_val, std_val = img.mean(), img.std()
 
-    st.subheader("📊 Informasi Statistik Citra")
-    st.write(f"**Ukuran Citra:** {h} x {w}")
-    st.write(f"**Rentang Pixel:** {img_gray.min()} - {img_gray.max()}")
-    st.write(f"**Mean (Kecerahan):** {img_gray.mean():.2f}")
-    st.write(f"**STD Dev (Kontras):** {img_gray.std():.2f}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Ukuran Citra", f"{h} x {w}")
+    col2.metric("Rentang Piksel", f"{int(pixel_min)} – {int(pixel_max)}")
+    col3.metric("Mean (Kecerahan)", f"{mean_val:.2f}")
+    col4.metric("Std Dev (Kontras)", f"{std_val:.2f}")
 
-    st.info(
-        "Citra memiliki distribusi intensitas tertentu. "
-        "Mean menunjukkan tingkat kecerahan, sedangkan standar deviasi "
-        "menunjukkan kontras citra."
-    )
+    if std_val < 40:
+        st.info("Kontras rendah")
+    elif std_val < 80:
+        st.info("Kontras sedang")
+    else:
+        st.success("Kontras tinggi")
 
-    # Histogram
-    fig, ax = plt.subplots()
-    ax.hist(img_gray.flatten(), bins=256)
-    ax.set_xlabel("Intensitas Pixel")
-    ax.set_ylabel("Frekuensi")
-    st.pyplot(fig)
+    # Visual + Histogram
+    fig1, ax = plt.subplots(1, 2, figsize=(10, 4))
+    ax[0].imshow(img, cmap="gray")
+    ax[0].set_title("Citra Grayscale")
+    ax[0].axis("off")
 
-    # =====================================================
-    # NORMALISASI / CENTERING DATA
-    # =====================================================
-    st.header("2️⃣ Normalisasi / Centering Data")
+    ax[1].hist(img.flatten(), bins=256, color="gray")
+    ax[1].set_title("Histogram Citra Asli")
+    ax[1].set_xlabel("Intensitas Piksel")
+    ax[1].set_ylabel("Frekuensi")
 
-    X = img_gray.astype(np.float64)
-    mean_vector = np.mean(X, axis=0)
-    X_centered = X - mean_vector
+    st.pyplot(fig1)
+
+    # =========================
+    # CENTERING DATA
+    # =========================
+    st.header("📐 Normalisasi / Centering Data")
+
+    mean_vector = np.mean(img, axis=0)
+    X_centered = img - mean_vector
 
     st.latex(r"X_{centered} = X - \mu")
-    st.write("Data dikurangi rata-rata setiap kolom (centering).")
 
-    # =====================================================
-    # PCA
-    # =====================================================
-    st.header("3️⃣ PCA dan Eigen Analysis")
+    # =========================
+    # KOVARIANS & EIGEN
+    # =========================
+    st.header("🧮 Matriks Kovarians & Eigen")
 
-    pca = PCA()
-    pca.fit(X_centered)
+    cov_matrix = np.cov(X_centered, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
 
-    eigenvalues = pca.explained_variance_
-    explained_var = pca.explained_variance_ratio_ * 100
-    eigenvectors = pca.components_
+    idx = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[idx]
+    eigenvectors = eigenvectors[:, idx]
 
-    # =====================================================
-    # TABEL EIGEN (PC1 - PC10)
-    # =====================================================
-    st.subheader("📋 Tabel Eigenvalue & Eigenvector (PC1 - PC10)")
+    explained_var = eigenvalues / np.sum(eigenvalues) * 100
 
-    data_eigen = []
-    for i in range(10):
-        data_eigen.append([
-            f"PC{i+1}",
-            eigenvalues[i],
-            explained_var[i],
-            interpret_eigen(explained_var[i])
-        ])
+    # =========================
+    # TABEL PC1–PC10
+    # =========================
+    makna = []
+    for val in explained_var[:10]:
+        if val > 10:
+            makna.append("Informasi sangat besar")
+        elif val > 5:
+            makna.append("Informasi besar")
+        elif val > 1:
+            makna.append("Informasi sedang")
+        else:
+            makna.append("Informasi kecil")
 
-    df_eigen = pd.DataFrame(
-        data_eigen,
-        columns=["Komponen", "Eigenvalue", "Persentase Informasi (%)", "Makna"]
-    )
-    st.dataframe(df_eigen)
+    df_pc = pd.DataFrame({
+        "Komponen": [f"PC{i+1}" for i in range(10)],
+        "Eigenvalue": eigenvalues[:10],
+        "Persentase Informasi (%)": explained_var[:10],
+        "Makna": makna
+    })
 
-    # =====================================================
-    # SCREE PLOT & CUMULATIVE
-    # =====================================================
-    st.header("4️⃣ Scree Plot & Cumulative Explained Variance")
+    st.subheader("Tabel Eigenvalue & Makna Informasi")
+    st.dataframe(df_pc, use_container_width=True)
 
-    cumulative = np.cumsum(explained_var)
+    # =========================
+    # GRAFIK PCA
+    # =========================
+    st.subheader("Visualisasi PCA")
 
-    fig, ax = plt.subplots()
-    ax.plot(explained_var[:100], marker='o')
-    ax.set_xlabel("Komponen Utama (PC)")
-    ax.set_ylabel("Eigenvalue (%)")
-    st.pyplot(fig)
+    fig2, ax2 = plt.subplots(1, 2, figsize=(12, 4))
 
-    fig, ax = plt.subplots()
-    ax.plot(cumulative[:100], marker='o')
-    ax.set_xlabel("Jumlah PC (K)")
-    ax.set_ylabel("Kumulatif Informasi (%)")
-    st.pyplot(fig)
+    ax2[0].bar(range(1, 11), explained_var[:10])
+    ax2[0].set_title("Top 10 Explained Variance")
+    ax2[0].set_xlabel("PC")
+    ax2[0].set_ylabel("% Informasi")
 
-    # =====================================================
+    ax2[1].plot(np.cumsum(explained_var[:100]), marker="o")
+    ax2[1].set_title("Cumulative Explained Variance")
+    ax2[1].set_xlabel("Jumlah PC (k)")
+    ax2[1].set_ylabel("Informasi Kumulatif (%)")
+
+    st.pyplot(fig2)
+
+    # =========================
     # PILIH K
-    # =====================================================
-    st.header("5️⃣ Rekonstruksi & Kompresi")
-    k = st.slider("Pilih jumlah komponen utama (K)", 1, min(200, w), 50)
+    # =========================
+    st.header("🎯 Rekonstruksi PCA")
 
-    pca_k = PCA(n_components=k)
-    Z = pca_k.fit_transform(X_centered)
-    X_reconstructed = pca_k.inverse_transform(Z) + mean_vector
+    k = st.slider("Pilih jumlah komponen utama (k)", 1, min(200, w), 50)
 
-    # =====================================================
+    pca = PCA(n_components=k)
+    X_pca = pca.fit_transform(X_centered)
+    X_recon = pca.inverse_transform(X_pca) + mean_vector
+
+    # =========================
     # EVALUASI
-    # =====================================================
-    mse_val = mean_squared_error(X, X_reconstructed)
-    psnr_val = psnr(X, X_reconstructed)
-    ssim_val = ssim(X, X_reconstructed, data_range=255)
+    # =========================
+    mse_val = mean_squared_error(img, X_recon)
+    psnr_val = 10 * math.log10((255 ** 2) / mse_val)
+    ssim_val = ssim(img, X_recon, data_range=255)
 
-    info_retained = np.sum(pca_k.explained_variance_ratio_) * 100
-    compression_ratio = (k * (h + w)) / (h * w) * 100
+    info_retained = np.sum(explained_var[:k])
 
-    st.subheader("📊 Evaluasi Kualitas Kompresi")
-    st.write(f"**Informasi Dipertahankan:** {info_retained:.2f}%")
-    st.write(f"**MSE:** {mse_val:.2f}")
-    st.write(f"**PSNR:** {psnr_val:.2f} dB")
-    st.write(f"**SSIM:** {ssim_val:.4f}")
-    st.write(f"**Rasio Kompresi:** {compression_ratio:.2f}%")
+    original_size = img.nbytes / 1024
+    compressed_size = X_pca.nbytes / 1024
+    saving = (1 - compressed_size / original_size) * 100
 
-    # =====================================================
-    # TABEL EVALUASI BEBERAPA K
-    # =====================================================
-    st.header("6️⃣ Tabel Evaluasi Beberapa Nilai K")
-
-    k_values = [5, 10, 20, 50, 100]
-    eval_data = []
-
-    for kv in k_values:
-        if kv < w:
-            pca_temp = PCA(n_components=kv)
-            Zt = pca_temp.fit_transform(X_centered)
-            Xt = pca_temp.inverse_transform(Zt) + mean_vector
-
-            mse_t = mean_squared_error(X, Xt)
-            psnr_t = psnr(X, Xt)
-            ssim_t = ssim(X, Xt, data_range=255)
-            info_t = np.sum(pca_temp.explained_variance_ratio_) * 100
-            ratio_t = (kv * (h + w)) / (h * w) * 100
-
-            eval_data.append([kv, info_t, mse_t, psnr_t, ssim_t, ratio_t])
-
-    df_eval = pd.DataFrame(
-        eval_data,
-        columns=["K", "Explained Variance (%)", "MSE", "PSNR", "SSIM", "Rasio Kompresi (%)"]
-    )
-    st.dataframe(df_eval)
-
-    # =====================================================
-    # EDA SETELAH KOMPRESI
-    # =====================================================
-    st.header("7️⃣ EDA Setelah Kompresi")
-
-    error_img = np.abs(X - X_reconstructed)
+    st.subheader("Evaluasi Kualitas Kompresi")
 
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.image(X, caption="Citra Asli", use_column_width=True, clamp=True)
-    with col2:
-        st.image(X_reconstructed, caption=f"Rekonstruksi (K={k})", use_column_width=True, clamp=True)
-    with col3:
-        st.image(error_img, caption="Error Image", use_column_width=True, clamp=True)
+    col1.metric("Informasi Dipertahankan", f"{info_retained:.2f}%")
+    col2.metric("PSNR", f"{psnr_val:.2f} dB")
+    col3.metric("SSIM", f"{ssim_val:.4f}")
 
-    fig, ax = plt.subplots()
-    ax.hist(X.flatten(), bins=256, alpha=0.5, label="Asli")
-    ax.hist(X_reconstructed.flatten(), bins=256, alpha=0.5, label="Rekonstruksi")
-    ax.legend()
-    st.pyplot(fig)
+    st.write(f"**MSE:** {mse_val:.4f}")
+    st.write(f"**Ukuran Asli:** {original_size:.2f} KB")
+    st.write(f"**Ukuran Terkompresi:** {compressed_size:.2f} KB")
+    st.write(f"**Penghematan Memori:** {saving:.2f}%")
 
-    # =====================================================
-    # RINGKASAN
-    # =====================================================
-    st.header("8️⃣ Ringkasan")
-    st.write("""
-    - PCA mereduksi dimensi citra dengan memilih eigenvalue terbesar  
-    - Eigenvalue menunjukkan seberapa besar informasi yang dibawa  
-    - Eigenvector adalah arah komponen utama  
-    - EDA membantu memahami distribusi data sebelum & sesudah kompresi  
-    - Nilai K menentukan trade-off antara kualitas dan ukuran data  
+    # =========================
+    # ERROR IMAGE (FIX)
+    # =========================
+    error_img = np.abs(img - X_recon)
+    error_img_norm = (error_img / error_img.max()) * 255
+    error_img_norm = error_img_norm.astype(np.uint8)
+
+    st.subheader("🖼️ Perbandingan Visual")
+
+    c1, c2, c3 = st.columns(3)
+    c1.image(img.astype(np.uint8), caption="Citra Asli", width=250)
+    c2.image(X_recon.astype(np.uint8), caption="Rekonstruksi PCA", width=250)
+    c3.image(error_img_norm, caption="Error Image", width=250)
+
+    # =========================
+    # KESIMPULAN
+    # =========================
+    st.header("📌 Ringkasan")
+
+    st.markdown("""
+    - PCA mereduksi dimensi citra dengan mempertahankan variansi terbesar.
+    - Eigenvalue menunjukkan seberapa besar informasi tiap komponen utama.
+    - Semakin besar nilai k, kualitas rekonstruksi meningkat namun kompresi berkurang.
+    - Error image menampilkan selisih lokal antara citra asli dan hasil PCA.
     """)
