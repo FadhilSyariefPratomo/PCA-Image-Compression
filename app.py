@@ -189,3 +189,5 @@ if uploaded_file is not None:
     - Semakin besar nilai k, kualitas rekonstruksi meningkat namun kompresi berkurang.
     - Error image menampilkan selisih lokal antara citra asli dan hasil PCA.
     """)
+
+    // test
